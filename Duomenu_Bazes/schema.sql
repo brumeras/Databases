@@ -1,6 +1,4 @@
--- ============================================
 -- UNIVERSITETO DUOMENŲ BAZĖS SCHEMA
--- ============================================
 
 -- Ištrinti esamas lenteles (jei egzistuoja)
 DROP TABLE IF EXISTS Laiko CASCADE;
@@ -19,9 +17,8 @@ DROP VIEW IF EXISTS Probleminiai_studentai CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS Studiju_programu_statistika CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS Destytoju_darbo_kruvis CASCADE;
 
--- ============================================
+
 -- LENTELIŲ KŪRIMAS
--- ============================================
 
 -- Studijų programų lentelė
 CREATE TABLE IF NOT EXISTS Studiju_programa (
@@ -106,9 +103,8 @@ CREATE TABLE IF NOT EXISTS Laiko(
     FOREIGN KEY (Data, Dalykas) REFERENCES Egzaminas(Data, Dalykas)
     );
 
--- ============================================
+
 -- APRIBOJIMAI (CONSTRAINTS)
--- ============================================
 
 -- BETWEEN predikatas pažymiui (1-10)
 ALTER TABLE Laiko
@@ -150,10 +146,7 @@ ALTER TABLE Grupe
     ADD CONSTRAINT Check_numeris
         CHECK (Grupes_nr < 10000);
 
--- ============================================
 -- DEFAULT REIKŠMĖS
--- ============================================
-
 ALTER TABLE Studiju_programa
     ALTER COLUMN Stojamasis_balas SET DEFAULT 5.00;
 
@@ -166,10 +159,8 @@ ALTER TABLE Destytojas
 ALTER TABLE Egzaminas
     ALTER COLUMN Data SET DEFAULT CURRENT_DATE;
 
--- ============================================
--- INDEKSAI
--- ============================================
 
+-- INDEKSAI
 -- Unikalus indeksas studento vardui ir pavardei
 CREATE UNIQUE INDEX indeksas_stud_var_pav
     ON Studentas (Vardas, Pavarde);
@@ -217,10 +208,8 @@ FROM Studentu_egz_vidurkiai S
 GROUP BY S.Studento_nr, S.Vardas, S.Pavarde, S.Studiju_programa, S.Vidurkis
 HAVING S.Vidurkis < 5 OR COUNT(CASE WHEN L.Pazymys < 5 THEN 1 END) >= 2;
 
--- ============================================
--- MATERIALIZUOTOS LENTELĖS (MATERIALIZED VIEWS)
--- ============================================
 
+-- MATERIALIZUOTOS LENTELĖS (MATERIALIZED VIEWS)
 -- Studijų programų statistika
 CREATE MATERIALIZED VIEW Studiju_programu_statistika AS
 SELECT
@@ -246,10 +235,7 @@ FROM Destytojas D
          LEFT JOIN Lanko_dalyka LD ON DE.Dalyko_pav = LD.Dalyko_pav
 GROUP BY D.Destytojo_nr;
 
--- ============================================
 -- DALYKINĖS TAISYKLĖS / TRIGGERIAI
--- ============================================
-
 -- 1. Studento stojamojo balo patikrinimas
 CREATE OR REPLACE FUNCTION Tikrinti_stojamaji_bala()
 RETURNS TRIGGER AS $$
@@ -355,10 +341,8 @@ CREATE TRIGGER triggeris_laipsnis
                          FOR EACH ROW
                          EXECUTE FUNCTION Tikrinti_laipsni();
 
--- ============================================
--- PABAIGA
--- ============================================
 
+-- PABAIGA
 -- Atnaujinti materialized views
 REFRESH MATERIALIZED VIEW Studiju_programu_statistika;
 REFRESH MATERIALIZED VIEW Destytoju_darbo_kruvis;
