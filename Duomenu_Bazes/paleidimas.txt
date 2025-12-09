@@ -1,0 +1,3 @@
+psql -U semilija25 -d universitetas -f schema.sql
+psql -U semilija25 -d universitetas -f data.sql
+dotnet run

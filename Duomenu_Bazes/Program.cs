@@ -2,6 +2,8 @@
 using System.Data;
 using Npgsql;
 
+// reikia update prideti 2
+
 class Program
 {
     static string connString = "Host=localhost;Port=5432;Database=universitetas;Username=semilija25;Password=";
@@ -376,7 +378,13 @@ class Program
         // TRANSAKCIJA
         using var tx = conn.BeginTransaction();
         try
-        {
+        {   // nereikia, nes darom update, turi grazinti, ar pakeite viena eilute
+            // ar ivyko sekmingai
+            // is duomenu bazes suprasti
+            // is griztamojo rysio, o ne selecto
+            // suprasti, kad ivyko 
+            // turi sudaryti insertas, delete... tik ne select
+            
             // Patikriname ar grupė egzistuoja
             string sqlCheck = "SELECT COUNT(*) FROM Grupe WHERE Grupes_id = @gid AND Studiju_programa_pav = @prog";
             using (var cmd = new NpgsqlCommand(sqlCheck, conn, tx))
@@ -411,7 +419,8 @@ class Program
             Console.WriteLine($"\n✗ Klaida perkėlimo metu: {ex.Message}");
         }
     }
-
+    
+    // reikia sutvarkyti irgi
     // 6. Duomenų trynimas - pašalinti studentą (TRANSAKCIJA su keliais DELETE)
     static void RemoveStudent(NpgsqlConnection conn)
     {
