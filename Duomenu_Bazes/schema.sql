@@ -1,805 +1,358 @@
-using System;
-using System.Data;
-using Npgsql;
+-- UNIVERSITETO DUOMENŲ BAZĖS SCHEMA
 
-class Program
-{
-    static string connString = "Host=localhost;Port=5432;Database=universitetas;Username=semilija25;Password=";
+-- Ištrinti esamas lenteles (jei egzistuoja)
+DROP TABLE IF EXISTS Laiko CASCADE;
+DROP TABLE IF EXISTS Lanko_dalyka CASCADE;
+DROP TABLE IF EXISTS Desto CASCADE;
+DROP TABLE IF EXISTS egzaminas CASCADE;
+DROP TABLE IF EXISTS Dalykas CASCADE;
+DROP TABLE IF EXISTS Destytojas CASCADE;
+DROP TABLE IF EXISTS studentas CASCADE;
+DROP TABLE IF EXISTS Grupe CASCADE;
+DROP TABLE IF EXISTS Studiju_programa CASCADE;
 
-    static void Main()
-    {
-        try
-        {
-            using var conn = new NpgsqlConnection(connString);
-            conn.Open();
-            Console.WriteLine("✓ Prisijungta prie duomenų bazės!");
+-- Ištrinti view'sus ir materialized view'sus
+DROP VIEW IF EXISTS Studentu_egz_vidurkiai CASCADE;
+DROP VIEW IF EXISTS Probleminiai_studentai CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS Studiju_programu_statistika CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS Destytoju_darbo_kruvis CASCADE;
 
-            while (true)
-            {
-                Console.WriteLine("\n═══════════════════════════════════════");
-                Console.WriteLine("       UNIVERSITETO VALDYMO SISTEMA");
-                Console.WriteLine("═══════════════════════════════════════");
-                Console.WriteLine("1.  Rodyti visus studentus");
-                Console.WriteLine("2.  Ieškoti studento pagal vardą/pavardę");
-                Console.WriteLine("3.  Rodyti studento informaciją su dalykais");
-                Console.WriteLine("4.  Užregistruoti naują studentą");
-                Console.WriteLine("5.  Perkelti studentą į kitą grupę (TRANSAKCIJA)");
-                Console.WriteLine("6.  Pašalinti studentą iš sistemos (TRANSAKCIJA)");
-                Console.WriteLine("7.  Rodyti studentų vidurkius (VIEW)");
-                Console.WriteLine("8.  Rodyti problematiškus studentus");
-                Console.WriteLine("9.  Įvesti egzamino pažymį studentui");
-                Console.WriteLine("10. Rodyti studijų programų statistiką");
-                Console.WriteLine("11. Rodyti dėstytojų darbo krūvį");
-                Console.WriteLine("0.  Baigti darbą");
-                Console.WriteLine("═══════════════════════════════════════");
-                Console.Write("Pasirinkite veiksmą: ");
-                
-                var choice = Console.ReadLine();
 
-                try
-{
-                    switch (choice)
-                    {
-                        case "1": ShowAllStudents(conn); break;
-case "2": SearchStudent(conn); break;
-case "3": ShowStudentDetails(conn); break;
-case "4": RegisterNewStudent(conn); break;
-case "5": TransferStudentToGroup(conn); break;
-case "6": RemoveStudent(conn); break;
-case "7": ShowStudentAverages(conn); break;
-case "8": ShowProblematicStudents(conn); break;
-case "9": AddExamGrade(conn); break;
-case "10": ShowProgramStatistics(conn); break;
-case "11": ShowTeacherWorkload(conn); break;
-case "0": 
-                            Console.WriteLine("\nAčiū, kad naudojotės sistema!");
-                            return;
-default: 
-                            Console.WriteLine("Neteisingas pasirinkimas. Bandykite dar kartą.");
-                            break;
-}
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"\n✗ Klaida: {ex.Message}");
-}
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"✗ Nepavyko prisijungti prie duomenų bazės: {ex.Message}");
-}
-    }
+-- LENTELIŲ KŪRIMAS
 
-    // 1. Duomenų paieška - rodyti visus studentus
-    static void ShowAllStudents(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- VISI STUDENTAI ---");
-        string sql = @"SELECT s.Studento_nr, s.Vardas, s.Pavarde, s.Studiju_programa_pav, 
-                       s.Stojamasis_balas, g.Grupes_nr
-                       FROM Studentas s
-                       LEFT JOIN Grupe g ON s.Grupes_numeris = g.Grupes_id
-                       ORDER BY s.Studento_nr";
+-- Studijų programų lentelė
+CREATE TABLE IF NOT EXISTS Studiju_programa (
+                                                Pavadinimas VARCHAR(100) PRIMARY KEY,
+    Stojamasis_balas DECIMAL(4, 2),
+    Fakultetas VARCHAR(100) NOT NULL
+    );
 
-using var cmd = new NpgsqlCommand(sql, conn);
-using var reader = cmd.ExecuteReader();
-        
-        Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė",-15} {"Programa",-20} {"Balas",-6} {"Grupė",-6}");
-        Console.WriteLine(new string('-', 80));
-        
-        while (reader.Read())
-        {
-            int nr = reader.GetInt32(0);
-            string vardas = reader.GetString(1);
-            string pavarde = reader.GetString(2);
-            string programa = reader.GetString(3);
-decimal balas = reader.GetDecimal(4);
-            string grupe = reader.IsDBNull(5) ? "-" : reader.GetInt32(5).ToString();
-            
-            Console.WriteLine($"{nr,-5} {vardas,-15} {pavarde,-15} {programa,-20} {balas,-6:F2} {grupe,-6}");
-}
-    }
+-- Grupių lentelė
+CREATE TABLE IF NOT EXISTS Grupe (
+                                     Grupes_id SERIAL PRIMARY KEY,
+                                     Grupes_nr INT,
+                                     Studiju_programa_pav VARCHAR(100) NOT NULL,
+    FOREIGN KEY (Studiju_programa_pav) REFERENCES Studiju_programa(Pavadinimas)
+    );
 
-    // 2. Duomenų paieška - ieškoti studento (naudoja LIKE)
-    static void SearchStudent(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- STUDENTO PAIEŠKA ---");
-        Console.Write("Įveskite studento vardą arba pavardę (arba jų dalį): ");
-        string search = Console.ReadLine();
-        
-        string sql = @"SELECT s.Studento_nr, s.Vardas, s.Pavarde, s.Studiju_programa_pav, 
-                       g.Grupes_nr, s.Miestas
-                       FROM Studentas s
-                       LEFT JOIN Grupe g ON s.Grupes_numeris = g.Grupes_id
-                       WHERE LOWER(s.Vardas) LIKE LOWER(@search) 
-                          OR LOWER(s.Pavarde) LIKE LOWER(@search)";
+-- Studentų lentelė
+CREATE TABLE IF NOT EXISTS studentas (
+                                         Studento_nr SERIAL PRIMARY KEY,
+                                         Stojamasis_balas DECIMAL(4, 2),
+    Vardas VARCHAR(50),
+    Pavarde VARCHAR(50),
+    Miestas VARCHAR(50),
+    Gatve VARCHAR(50),
+    Namas VARCHAR(50),
+    Studiju_programa_pav VARCHAR(100) NOT NULL,
+    Grupes_numeris INT,
+    FOREIGN KEY (Studiju_programa_pav) REFERENCES Studiju_programa(Pavadinimas),
+    FOREIGN KEY (Grupes_numeris) REFERENCES Grupe(Grupes_id)
+    );
 
-using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("search", $"%{search}%");
+-- Dėstytojų lentelė
+CREATE TABLE IF NOT EXISTS Destytojas (
+                                          Destytojo_nr SERIAL PRIMARY KEY,
+                                          Vardas VARCHAR(50),
+    Pavarde VARCHAR(50),
+    Laipsnis VARCHAR(50),
+    Fakultetas VARCHAR(100)
+    );
 
-using var reader = cmd.ExecuteReader();
-        bool found = false;
-        
-        while (reader.Read())
-        {
-            found = true;
-            Console.WriteLine($"\nStudentas #{reader.GetInt32(0)}:");
-            Console.WriteLine($"  Vardas: {reader.GetString(1)} {reader.GetString(2)}");
-            Console.WriteLine($"  Programa: {reader.GetString(3)}");
-            Console.WriteLine($"  Grupė: {(reader.IsDBNull(4) ? "nepriskirta" : reader.GetInt32(4).ToString())}");
-            Console.WriteLine($"  Miestas: {reader.GetString(5)}");
-}
-        
-        if (!found)
-            Console.WriteLine("Studentų nerasta.");
-}
+-- Dalykų lentelė
+CREATE TABLE IF NOT EXISTS Dalykas (
+                                       Pavadinimas VARCHAR(100) PRIMARY KEY,
+    Fakultetas VARCHAR(100),
+    Reikalingas_laipsnis VARCHAR(100)
+    );
 
-    // 3. Duomenų paieška su JOIN - studento detalės su dalykais
-    static void ShowStudentDetails(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- STUDENTO INFORMACIJA ---");
+-- Dėstymo ryšių lentelė
+CREATE TABLE IF NOT EXISTS Desto (
+                                     Destytojo_nr INT,
+                                     Dalyko_pav VARCHAR(100),
+    PRIMARY KEY (Destytojo_nr, Dalyko_pav),
+    FOREIGN KEY (Destytojo_nr) REFERENCES Destytojas(Destytojo_nr),
+    FOREIGN KEY (Dalyko_pav) REFERENCES Dalykas(Pavadinimas)
+    );
 
-// Parodome visus studentus su jų ID
-        Console.WriteLine("\nEsami studentai:");
-        string sqlList = "SELECT Studento_nr, Vardas, Pavarde FROM Studentas ORDER BY Studento_nr";
-using (var cmdList = new NpgsqlCommand(sqlList, conn))
-        using (var readerList = cmdList.ExecuteReader())
-        {
-            Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė"}");
-            Console.WriteLine(new string('-', 40));
-            while (readerList.Read())
-            {
-                Console.WriteLine($"{readerList.GetInt32(0),-5} {readerList.GetString(1),-15} {readerList.GetString(2)}");
-}
-        }
-        
-        Console.Write("\nĮveskite studento numerį: ");
-        
-        if (!int.TryParse(Console.ReadLine(), out int studentoNr))
-        {
-            Console.WriteLine("Neteisingas numeris.");
-            return;
-}
-        
-        // Pagrindinė info
-        string sql1 = @"SELECT s.Vardas, s.Pavarde, s.Studiju_programa_pav, s.Stojamasis_balas,
-                        s.Miestas, s.Gatve, s.Namas, g.Grupes_nr
-                        FROM Studentas s
-                        LEFT JOIN Grupe g ON s.Grupes_numeris = g.Grupes_id
-                        WHERE s.Studento_nr = @nr";
+-- Lankymų lentelė
+CREATE TABLE IF NOT EXISTS Lanko_dalyka (
+                                            Studento_nr INT,
+                                            Dalyko_pav VARCHAR(100),
+    PRIMARY KEY (Studento_nr, Dalyko_pav),
+    FOREIGN KEY (Studento_nr) REFERENCES Studentas(Studento_nr),
+    FOREIGN KEY (Dalyko_pav) REFERENCES Dalykas(Pavadinimas)
+    );
 
-using (var cmd = new NpgsqlCommand(sql1, conn))
-        {
-            cmd.Parameters.AddWithValue("nr", studentoNr);
-using var reader = cmd.ExecuteReader();
-            
-            if (!reader.Read())
-            {
-                Console.WriteLine("Studentas nerastas.");
-                return;
-}
-            
-            Console.WriteLine($"\n{reader.GetString(0)} {reader.GetString(1)}");
-            Console.WriteLine($"Programa: {reader.GetString(2)}");
-            Console.WriteLine($"Stojamasis balas: {reader.GetDecimal(3):F2}");
-            Console.WriteLine($"Adresas: {reader.GetString(4)}, {reader.GetString(5)} {reader.GetString(6)}");
-            Console.WriteLine($"Grupė: {(reader.IsDBNull(7) ? "nepriskirta" : reader.GetInt32(7).ToString())}");
-}
-        
-        // Lankomų dalykų sąrašas
-        string sql2 = @"SELECT d.Pavadinimas, d.Fakultetas, ds.Vardas, ds.Pavarde
-                        FROM Lanko_dalyka ld
-                        JOIN Dalykas d ON ld.Dalyko_pav = d.Pavadinimas
-                        LEFT JOIN Desto de ON d.Pavadinimas = de.Dalyko_pav
-                        LEFT JOIN Destytojas ds ON de.Destytojo_nr = ds.Destytojo_nr
-                        WHERE ld.Studento_nr = @nr";
+-- Egzaminų lentelė
+CREATE TABLE IF NOT EXISTS egzaminas (
+                                         Data DATE NOT NULL,
+                                         Dalykas VARCHAR(100) NOT NULL,
+    PRIMARY KEY (Data, Dalykas),
+    FOREIGN KEY (Dalykas) REFERENCES Dalykas(Pavadinimas)
+    );
 
-using (var cmd = new NpgsqlCommand(sql2, conn))
-        {
-            cmd.Parameters.AddWithValue("nr", studentoNr);
-using var reader = cmd.ExecuteReader();
-            
-            Console.WriteLine("\nLankomi dalykai:");
-            bool hasCourses = false;
-            while (reader.Read())
-            {
-                hasCourses = true;
-                string destytojas = reader.IsDBNull(2) ? "nėra dėstytojo" : 
-                                   $"{reader.GetString(2)} {reader.GetString(3)}";
-                Console.WriteLine($"  • {reader.GetString(0)} ({reader.GetString(1)}) - dėsto: {destytojas}");
-}
-            if (!hasCourses)
-                Console.WriteLine("  Studentas nelanko jokių dalykų.");
-}
-        
-        // Egzaminų rezultatai
-        string sql3 = @"SELECT l.Dalykas, l.Data, l.Pazymys
-                        FROM Laiko l
-                        WHERE l.Studento_nr = @nr
-                        ORDER BY l.Data DESC";
+-- Egzaminų rezultatų lentelė
+CREATE TABLE IF NOT EXISTS Laiko(
+                                    Studento_nr INT,
+                                    Dalykas VARCHAR(100),
+    Data DATE NOT NULL,
+    Pazymys DEC(4, 2),
+    PRIMARY KEY (Studento_nr, Dalykas, Data),
+    FOREIGN KEY (Studento_nr) REFERENCES Studentas(Studento_nr),
+    FOREIGN KEY (Data, Dalykas) REFERENCES Egzaminas(Data, Dalykas)
+    );
 
-using (var cmd = new NpgsqlCommand(sql3, conn))
-        {
-            cmd.Parameters.AddWithValue("nr", studentoNr);
-using var reader = cmd.ExecuteReader();
-            
-            Console.WriteLine("\nEgzaminų rezultatai:");
-            bool hasExams = false;
-            while (reader.Read())
-            {
-                hasExams = true;
-                Console.WriteLine($"  • {reader.GetString(0)}: {reader.GetDecimal(2):F1} ({reader.GetDateTime(1):yyyy-MM-dd})");
-}
-            if (!hasExams)
-                Console.WriteLine("  Studentas dar nelaikė egzaminų.");
-}
-    }
 
-    // 4. Duomenų įvedimas - registruoti naują studentą
-    static void RegisterNewStudent(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- NAUJO STUDENTO REGISTRACIJA ---");
+-- APRIBOJIMAI (CONSTRAINTS)
 
-// Parodome esamas studijų programas
-        Console.WriteLine("\nGalimos studijų programos:");
-        string sqlProg = "SELECT Pavadinimas, Stojamasis_balas, Fakultetas FROM Studiju_programa";
-using (var cmd = new NpgsqlCommand(sqlProg, conn))
-        using (var reader = cmd.ExecuteReader())
-        {
-            Console.WriteLine($"{"Pavadinimas",-20} {"Min. balas",-12} {"Fakultetas"}");
-            Console.WriteLine(new string('-', 60));
-            while (reader.Read())
-            {
-                Console.WriteLine($"{reader.GetString(0),-20} {reader.GetDecimal(1),-12:F2} {reader.GetString(2)}");
-}
-        }
-        
-        Console.Write("\nVardas: ");
-        string vardas = Console.ReadLine();
-        
-        Console.Write("Pavardė: ");
-        string pavarde = Console.ReadLine();
-        
-        Console.Write("Studijų programos pavadinimas: ");
-        string programa = Console.ReadLine();
-        
-        Console.Write("Stojamasis balas: ");
-        if (!decimal.TryParse(Console.ReadLine(), out decimal balas))
-        {
-            Console.WriteLine("Neteisingas balas.");
-            return;
-}
-        
-        Console.Write("Miestas (Enter - Vilnius): ");
-        string miestas = Console.ReadLine();
-        if (string.IsNullOrWhiteSpace(miestas)) miestas = "Vilnius";
-        
-        Console.Write("Gatvė: ");
-        string gatve = Console.ReadLine();
-        
-        Console.Write("Namo numeris: ");
-        string namas = Console.ReadLine();
+-- BETWEEN predikatas pažymiui (1-10)
+ALTER TABLE Laiko
+    ADD CONSTRAINT Check_pazymys
+        CHECK (Pazymys BETWEEN 1 AND 10);
 
-// Parodome galimas grupes
-        Console.WriteLine($"\nGalimos grupės programai '{programa}':");
-        string sqlGrupe = @"SELECT Grupes_id, Grupes_nr FROM Grupe 
-                           WHERE Studiju_programa_pav = @prog";
-using (var cmd = new NpgsqlCommand(sqlGrupe, conn))
-        {
-            cmd.Parameters.AddWithValue("prog", programa);
-using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                Console.WriteLine($"  ID: {reader.GetInt32(0)}, Grupės nr: {reader.GetInt32(1)}");
-}
-        }
-        
-        Console.Write("Grupės ID (Enter - praleisti): ");
-        string grupeInput = Console.ReadLine();
-int? grupeId = string.IsNullOrWhiteSpace(grupeInput) ? null : int.Parse(grupeInput);
+-- IN predikatas dėstytojo laipsniui
+ALTER TABLE Destytojas
+    ADD CONSTRAINT Check_laipsnis
+        CHECK (Laipsnis IN ('Magistrantas', 'Docentas', 'Daktaras', 'Profesorius'));
 
-// Įrašome studentą
-        string sql = @"INSERT INTO Studentas 
-                      (Vardas, Pavarde, Studiju_programa_pav, Stojamasis_balas, 
-                       Miestas, Gatve, Namas, Grupes_numeris)
-                      VALUES (@vardas, @pavarde, @prog, @balas, @miestas, @gatve, @namas, @grupe)
-                      RETURNING Studento_nr";
-        
-        try
-{
-            using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("vardas", vardas);
-            cmd.Parameters.AddWithValue("pavarde", pavarde);
-            cmd.Parameters.AddWithValue("prog", programa);
-            cmd.Parameters.AddWithValue("balas", balas);
-            cmd.Parameters.AddWithValue("miestas", miestas);
-            cmd.Parameters.AddWithValue("gatve", gatve);
-            cmd.Parameters.AddWithValue("namas", namas);
-            cmd.Parameters.AddWithValue("grupe", grupeId.HasValue ? (object)grupeId.Value : DBNull.Value);
+-- LIKE predikatas studento vardui (negali prasidėti skaičiumi)
+ALTER TABLE Studentas
+    ADD CONSTRAINT Check_vardas
+        CHECK (Vardas !~ '^[0-9]');
 
-int newId = (int)cmd.ExecuteScalar();
-            Console.WriteLine($"\n✓ Studentas sėkmingai užregistruotas! Studento numeris: {newId}");
-            Console.WriteLine($"  DB grąžino: ExecuteScalar() = {newId} (RETURNING clause)");
-}
-        catch (PostgresException ex)
-        {
-            Console.WriteLine("\n✗ NEPAVYKO ĮVESTI STUDENTO");
-            Console.WriteLine($"  PostgreSQL klaidos kodas: {ex.SqlState}");
-            Console.WriteLine($"  Klaidos pranešimas: {ex.MessageText}");
-            
-            if (ex.Message.Contains("per mazas"))
-                Console.WriteLine($"\n  Priežastis: Stojamasis balas per mažas šiai programai!");
-else if (ex.Message.Contains("nesutampa"))
-                Console.WriteLine($"\n  Priežastis: Grupė nepriklauso pasirinktai programai!");
-else if (ex.ConstraintName != null)
-                Console.WriteLine($"\n  Pažeistas apribojimas: {ex.ConstraintName}");
-}
-    }
+-- LIKE predikatas studento pavardei (negali prasidėti skaičiumi)
+ALTER TABLE Studentas
+    ADD CONSTRAINT Check_pavarde
+        CHECK (Pavarde !~ '^[0-9]');
 
-    // 5. Duomenų atnaujinimas - perkelti studentą į kitą grupę (TRANSAKCIJA)
-    static void TransferStudentToGroup(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- STUDENTO PERKĖLIMAS Į KITĄ GRUPĘ ---");
+-- IS NOT NULL predikatas studijų programos fakultetui
+ALTER TABLE Studiju_programa
+    ADD CONSTRAINT Check_fakultetasstud
+        CHECK (Fakultetas IS NOT NULL);
 
-// Parodome visus studentus
-        Console.WriteLine("\nEsami studentai:");
-        string sqlList = @"SELECT s.Studento_nr, s.Vardas, s.Pavarde, s.Studiju_programa_pav, g.Grupes_nr
-                          FROM Studentas s
-                          LEFT JOIN Grupe g ON s.Grupes_numeris = g.Grupes_id
-                          ORDER BY s.Studento_nr";
-using (var cmdList = new NpgsqlCommand(sqlList, conn))
-        using (var readerList = cmdList.ExecuteReader())
-        {
-            Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė",-15} {"Programa",-20} {"Grupė"}");
-            Console.WriteLine(new string('-', 70));
-            while (readerList.Read())
-            {
-                string grupe = readerList.IsDBNull(4) ? "-" : readerList.GetInt32(4).ToString();
-                Console.WriteLine($"{readerList.GetInt32(0),-5} {readerList.GetString(1),-15} " +
-                                $"{readerList.GetString(2),-15} {readerList.GetString(3),-20} {grupe}");
-}
-        }
-        
-        Console.Write("\nĮveskite studento numerį: ");
-        if (!int.TryParse(Console.ReadLine(), out int studentoNr))
-        {
-            Console.WriteLine("Neteisingas numeris.");
-            return;
-}
-        
-        // Parodome studento dabartinę informaciją
-        string sqlCurrent = @"SELECT s.Vardas, s.Pavarde, s.Studiju_programa_pav, g.Grupes_nr
-                             FROM Studentas s
-                             LEFT JOIN Grupe g ON s.Grupes_numeris = g.Grupes_id
-                             WHERE s.Studento_nr = @nr";
-        
-        string programaPav;
-using (var cmd = new NpgsqlCommand(sqlCurrent, conn))
-        {
-            cmd.Parameters.AddWithValue("nr", studentoNr);
-using var reader = cmd.ExecuteReader();
-            
-            if (!reader.Read())
-            {
-                Console.WriteLine("Studentas nerastas.");
-                return;
-}
-            
-            Console.WriteLine($"\nStudentas: {reader.GetString(0)} {reader.GetString(1)}");
-            programaPav = reader.GetString(2);
-            Console.WriteLine($"Programa: {programaPav}");
-            Console.WriteLine($"Dabartinė grupė: {(reader.IsDBNull(3) ? "nepriskirta" : reader.GetInt32(3).ToString())}");
-}
-        
-        // Parodome galimas grupes
-        Console.WriteLine($"\nGalimos grupės:");
-        string sqlGrupes = @"SELECT Grupes_id, Grupes_nr FROM Grupe 
-                            WHERE Studiju_programa_pav = @prog";
-using (var cmd = new NpgsqlCommand(sqlGrupes, conn))
-        {
-            cmd.Parameters.AddWithValue("prog", programaPav);
-using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                Console.WriteLine($"  ID: {reader.GetInt32(0)}, Grupės nr: {reader.GetInt32(1)}");
-}
-        }
-        
-        Console.Write("\nĮveskite naujos grupės ID: ");
-        if (!int.TryParse(Console.ReadLine(), out int newGrupeId))
-        {
-            Console.WriteLine("Neteisingas ID.");
-            return;
-}
-        
-        // TRANSAKCIJA
-        using var tx = conn.BeginTransaction();
-        try
-{
-            Console.WriteLine("\n[TRANSAKCIJA PRADĖTA]");
+-- IS NOT NULL predikatas dėstytojo fakultetui
+ALTER TABLE Destytojas
+    ADD CONSTRAINT Check_fakultetasdes
+        CHECK (Fakultetas IS NOT NULL);
 
-// Patikriname ar grupė egzistuoja
-            string sqlCheck = "SELECT COUNT(*) FROM Grupe WHERE Grupes_id = @gid AND Studiju_programa_pav = @prog";
-using (var cmd = new NpgsqlCommand(sqlCheck, conn, tx))
-            {
-                cmd.Parameters.AddWithValue("gid", newGrupeId);
-                cmd.Parameters.AddWithValue("prog", programaPav);
-                long count = (long)cmd.ExecuteScalar();
-                
-                Console.WriteLine($"  SELECT rezultatas: Rasta grupių: {count}");
-                
-                if (count == 0)
-                {
-                    Console.WriteLine("\n✗ Grupė nerasta arba nepriklauso studento programai.");
-                    Console.WriteLine("[TRANSAKCIJA ATŠAUKTA - ROLLBACK]");
-                    tx.Rollback();
-                    return;
-}
-            }
-            
-            // Atnaujiname studento grupę
-            string sqlUpdate = "UPDATE Studentas SET Grupes_numeris = @gid WHERE Studento_nr = @nr";
-using (var cmd = new NpgsqlCommand(sqlUpdate, conn, tx))
-            {
-                cmd.Parameters.AddWithValue("gid", newGrupeId);
-                cmd.Parameters.AddWithValue("nr", studentoNr);
-int rowsAffected = cmd.ExecuteNonQuery();
-                
-                Console.WriteLine($"  UPDATE rezultatas: Pakeista eilučių: {rowsAffected}");
-                
-                if (rowsAffected == 0)
-                {
-                    Console.WriteLine("\n✗ Nepavyko atnaujinti studento duomenų.");
-                    Console.WriteLine("[TRANSAKCIJA ATŠAUKTA - ROLLBACK]");
-                    tx.Rollback();
-                    return;
-}
-            }
-            
-            tx.Commit();
-            Console.WriteLine("\n[TRANSAKCIJA PATVIRTINTA - COMMIT]");
-            Console.WriteLine("✓ Studentas sėkmingai perkeltas į naują grupę!");
-}
-        catch (PostgresException ex)
-        {
-            tx.Rollback();
-            Console.WriteLine("\n✗ KLAIDA TRANSAKCIJOJE");
-            Console.WriteLine($"  PostgreSQL klaidos kodas: {ex.SqlState}");
-            Console.WriteLine($"  Klaidos pranešimas: {ex.MessageText}");
-            Console.WriteLine("[TRANSAKCIJA ATŠAUKTA - ROLLBACK]");
-}
-    }
+-- IS NOT NULL predikatas dalyko fakultetui
+ALTER TABLE Dalykas
+    ADD CONSTRAINT Check_fakultetasdal
+        CHECK (Fakultetas IS NOT NULL);
 
-    // 6. Duomenų trynimas - pašalinti studentą (TRANSAKCIJA su keliais DELETE)
-    static void RemoveStudent(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- STUDENTO PAŠALINIMAS IŠ SISTEMOS ---");
+-- COMPARISON predikatas grupės numeriui
+ALTER TABLE Grupe
+    ADD CONSTRAINT Check_numeris
+        CHECK (Grupes_nr < 10000);
 
-// Parodome visus studentus
-        Console.WriteLine("\nEsami studentai:");
-        string sqlList = "SELECT Studento_nr, Vardas, Pavarde, Studiju_programa_pav FROM Studentas ORDER BY Studento_nr";
-using (var cmdList = new NpgsqlCommand(sqlList, conn))
-        using (var readerList = cmdList.ExecuteReader())
-        {
-            Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė",-15} {"Programa"}");
-            Console.WriteLine(new string('-', 60));
-            while (readerList.Read())
-            {
-                Console.WriteLine($"{readerList.GetInt32(0),-5} {readerList.GetString(1),-15} " +
-                                $"{readerList.GetString(2),-15} {readerList.GetString(3)}");
-}
-        }
-        
-        Console.Write("\nĮveskite studento numerį: ");
-        if (!int.TryParse(Console.ReadLine(), out int studentoNr))
-        {
-            Console.WriteLine("Neteisingas numeris.");
-            return;
-}
-        
-        // Parodome studento informaciją
-        string sqlInfo = "SELECT Vardas, Pavarde, Studiju_programa_pav FROM Studentas WHERE Studento_nr = @nr";
-using (var cmd = new NpgsqlCommand(sqlInfo, conn))
-        {
-            cmd.Parameters.AddWithValue("nr", studentoNr);
-using var reader = cmd.ExecuteReader();
-            
-            if (!reader.Read())
-            {
-                Console.WriteLine("Studentas nerastas.");
-                return;
-}
-            
-            Console.WriteLine($"\nRastas studentas: {reader.GetString(0)} {reader.GetString(1)}");
-            Console.WriteLine($"Programa: {reader.GetString(2)}");
-}
-        
-        Console.Write("\nAr tikrai norite pašalinti šį studentą? (taip/ne): ");
-        string confirm = Console.ReadLine()?.ToLower();
-        
-        if (confirm != "taip")
-        {
-            Console.WriteLine("Operacija atšaukta.");
-            return;
-}
-        
-        // TRANSAKCIJA - trinti iš visų susijusių lentelių
-        using var tx = conn.BeginTransaction();
-        try
-{
-            Console.WriteLine("\n[TRANSAKCIJA PRADĖTA - Keliamos 2 lentelės]");
-int totalDeleted = 0;
+-- DEFAULT REIKŠMĖS
+ALTER TABLE Studiju_programa
+    ALTER COLUMN Stojamasis_balas SET DEFAULT 5.00;
 
-// 1. Trinti iš Laiko (egzaminų rezultatai)
-            using (var cmd = new NpgsqlCommand("DELETE FROM Laiko WHERE Studento_nr = @nr", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("nr", studentoNr);
-int deleted = cmd.ExecuteNonQuery();
-                totalDeleted += deleted;
-                Console.WriteLine($"  DELETE iš Laiko: Ištrinta {deleted} egzaminų rezultatų");
-}
-            
-            // 2. Trinti iš Lanko_dalyka (lankomi dalykai)
-            using (var cmd = new NpgsqlCommand("DELETE FROM Lanko_dalyka WHERE Studento_nr = @nr", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("nr", studentoNr);
-int deleted = cmd.ExecuteNonQuery();
-                totalDeleted += deleted;
-                Console.WriteLine($"  DELETE iš Lanko_dalyka: Atsieta {deleted} dalykų");
-}
-            
-            // 3. Trinti studentą
-            using (var cmd = new NpgsqlCommand("DELETE FROM Studentas WHERE Studento_nr = @nr", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("nr", studentoNr);
-int deleted = cmd.ExecuteNonQuery();
-                
-                Console.WriteLine($"  DELETE iš Studentas: Ištrinta {deleted} studento įrašų");
-                
-                if (deleted == 0)
-                {
-                    Console.WriteLine("\n✗ Studentas nebuvo ištrintas (galbūt jau neegzistuoja).");
-                    Console.WriteLine("[TRANSAKCIJA ATŠAUKTA - ROLLBACK]");
-                    tx.Rollback();
-                    return;
-}
-                totalDeleted += deleted;
-}
-            
-            tx.Commit();
-            Console.WriteLine($"\n[TRANSAKCIJA PATVIRTINTA - COMMIT]");
-            Console.WriteLine($"✓ Studentas sėkmingai pašalintas! Iš viso pašalinta {totalDeleted} įrašų.");
-}
-        catch (PostgresException ex)
-        {
-            tx.Rollback();
-            Console.WriteLine("\n✗ KLAIDA ŠALINANT STUDENTĄ");
-            Console.WriteLine($"  PostgreSQL klaidos kodas: {ex.SqlState}");
-            Console.WriteLine($"  Klaidos pranešimas: {ex.MessageText}");
-            Console.WriteLine("[TRANSAKCIJA ATŠAUKTA - ROLLBACK]");
-}
-    }
+ALTER TABLE Studentas
+    ALTER COLUMN Miestas SET DEFAULT 'Vilnius';
 
-    // 7. VIEW - studento vidurkiai
-    static void ShowStudentAverages(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- STUDENTŲ EGZAMINŲ VIDURKIAI ---");
-        
-        string sql = @"SELECT Studento_nr, Vardas, Pavarde, Studiju_programa, 
-                       COALESCE(Vidurkis, 0) as Vidurkis
-                       FROM Studentu_egz_vidurkiai
-                       ORDER BY Vidurkis DESC";
+ALTER TABLE Destytojas
+    ALTER COLUMN Laipsnis SET DEFAULT 'Bakalauras';
 
-using var cmd = new NpgsqlCommand(sql, conn);
-using var reader = cmd.ExecuteReader();
-        
-        Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė",-15} {"Programa",-20} {"Vidurkis"}");
-        Console.WriteLine(new string('-', 75));
-        
-        while (reader.Read())
-        {
-            Console.WriteLine($"{reader.GetInt32(0),-5} {reader.GetString(1),-15} {reader.GetString(2),-15} " +
-                            $"{reader.GetString(3),-20} {reader.GetDouble(4):F2}");
-}
-    }
+ALTER TABLE Egzaminas
+    ALTER COLUMN Data SET DEFAULT CURRENT_DATE;
 
-    // 8. VIEW - problemiški studentai
-    static void ShowProblematicStudents(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- PROBLEMIŠKI STUDENTAI ---");
-        Console.WriteLine("(Vidurkis < 5 arba 2+ neišlaikyti egzaminai)\n");
-        
-        string sql = "SELECT * FROM Probleminiai_studentai ORDER BY Vidurkis";
 
-using var cmd = new NpgsqlCommand(sql, conn);
-using var reader = cmd.ExecuteReader();
-        
-        if (!reader.HasRows)
-        {
-            Console.WriteLine("Probleminių studentų nėra. Puiku!");
-            return;
-}
-        
-        Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė",-15} {"Vidurkis",-10} {"Neišlaikyta"}");
-        Console.WriteLine(new string('-', 70));
-        
-        while (reader.Read())
-        {
-            Console.WriteLine($"{reader.GetInt32(0),-5} {reader.GetString(1),-15} {reader.GetString(2),-15} " +
-                            $"{reader.GetDouble(4):F2,-10} {reader.GetInt64(5)}");
-}
-    }
+-- INDEKSAI
+-- Unikalus indeksas studento vardui ir pavardei
+CREATE UNIQUE INDEX indeksas_stud_var_pav
+    ON Studentas (Vardas, Pavarde);
 
-    // 9. Įvesti egzamino pažymį (modifikuoja 1 lentelę)
-    static void AddExamGrade(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- EGZAMINO PAŽYMIO ĮVEDIMAS ---");
+-- Unikalus indeksas grupės numeriui ir programai
+CREATE UNIQUE INDEX indeksas_grupes_nr
+    ON Grupe (Grupes_nr, Studiju_programa_pav);
 
-// Parodome visus studentus
-        Console.WriteLine("\nEsami studentai:");
-        string sqlStudList = "SELECT Studento_nr, Vardas, Pavarde FROM Studentas ORDER BY Studento_nr";
-using (var cmdList = new NpgsqlCommand(sqlStudList, conn))
-        using (var readerList = cmdList.ExecuteReader())
-        {
-            Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė"}");
-            Console.WriteLine(new string('-', 40));
-            while (readerList.Read())
-            {
-                Console.WriteLine($"{readerList.GetInt32(0),-5} {readerList.GetString(1),-15} {readerList.GetString(2)}");
-}
-        }
-        
-        Console.Write("\nStudento numeris: ");
-        if (!int.TryParse(Console.ReadLine(), out int studentoNr))
-        {
-            Console.WriteLine("Neteisingas numeris.");
-            return;
-}
-        
-        // Parodome studento lankomas disciplinas
-        Console.WriteLine("\nStudento lankomi dalykai:");
-        string sqlDalykai = @"SELECT d.Pavadinimas FROM Lanko_dalyka ld
-                             JOIN Dalykas d ON ld.Dalyko_pav = d.Pavadinimas
-                             WHERE ld.Studento_nr = @nr";
-using (var cmd = new NpgsqlCommand(sqlDalykai, conn))
-        {
-            cmd.Parameters.AddWithValue("nr", studentoNr);
-using var reader = cmd.ExecuteReader();
-            bool hasCourses = false;
-            while (reader.Read())
-            {
-                hasCourses = true;
-                Console.WriteLine($"  • {reader.GetString(0)}");
-}
-            if (!hasCourses)
-            {
-                Console.WriteLine("  Studentas nelanko jokių dalykų!");
-                return;
-}
-        }
-        
-        Console.Write("\nDalyko pavadinimas: ");
-        string dalykas = Console.ReadLine();
+-- Neunikalus indeksas studijų programos fakultetui
+CREATE INDEX indeksas_stud_prog
+    ON Studiju_programa (Fakultetas);
 
-// Parodome galimus egzaminus
-        Console.WriteLine("\nPlanuojami egzaminai:");
-        string sqlEgz = "SELECT Data FROM Egzaminas WHERE Dalykas = @dalykas ORDER BY Data";
-using (var cmd = new NpgsqlCommand(sqlEgz, conn))
-        {
-            cmd.Parameters.AddWithValue("dalykas", dalykas);
-using var reader = cmd.ExecuteReader();
-            bool hasExams = false;
-            while (reader.Read())
-            {
-                hasExams = true;
-                Console.WriteLine($"  • {reader.GetDateTime(0):yyyy-MM-dd}");
-}
-            if (!hasExams)
-            {
-                Console.WriteLine("  Nėra suplanuotų egzaminų šiam dalykui!");
-                return;
-}
-        }
-        
-        Console.Write("\nEgzamino data (yyyy-MM-dd): ");
-        if (!DateTime.TryParse(Console.ReadLine(), out DateTime data))
-        {
-            Console.WriteLine("Neteisinga data.");
-            return;
-}
-        
-        Console.Write("Pažymys (1-10): ");
-        if (!decimal.TryParse(Console.ReadLine(), out decimal pazymys))
-        {
-            Console.WriteLine("Neteisingas pažymys.");
-            return;
-}
-        
-        string sql = @"INSERT INTO Laiko (Studento_nr, Dalykas, Data, Pazymys)
-                      VALUES (@nr, @dalykas, @data, @pazymys)";
-        
-        try
-{
-            using var cmd = new NpgsqlCommand(sql, conn);
-            cmd.Parameters.AddWithValue("nr", studentoNr);
-            cmd.Parameters.AddWithValue("dalykas", dalykas);
-            cmd.Parameters.AddWithValue("data", data);
-            cmd.Parameters.AddWithValue("pazymys", pazymys);
+-- Neunikalus indeksas pažymiui
+CREATE INDEX indeksas_pazymys
+    ON Laiko (Pazymys);
 
-int rowsAffected = cmd.ExecuteNonQuery();
-            Console.WriteLine($"\n✓ Pažymys sėkmingai įvestas!");
-            Console.WriteLine($"  DB grąžino: ExecuteNonQuery() = {rowsAffected} (įterpta eilučių)");
-}
-        catch (PostgresException ex)
-        {
-            Console.WriteLine("\n✗ NEPAVYKO ĮVESTI PAŽYMIO");
-            Console.WriteLine($"  PostgreSQL klaidos kodas: {ex.SqlState}");
-            Console.WriteLine($"  Klaidos pranešimas: {ex.MessageText}");
-            
-            if (ex.SqlState == "23503") // Foreign key violation
-                Console.WriteLine("\n  Priežastis: Studentas nelanko šio dalyko arba egzaminas neegzistuoja!");
-else if (ex.SqlState == "23505") // Unique violation
-                Console.WriteLine("\n  Priežastis: Pažymys šiam egzaminui jau įvestas!");
-else if (ex.ConstraintName != null)
-                Console.WriteLine($"\n  Pažeistas apribojimas: {ex.ConstraintName}");
-}
-    }
+-- ============================================
+-- VIRTUALIOS LENTELĖS (VIEWS)
+-- ============================================
 
-    // 10. Materialized view - programų statistika
-    static void ShowProgramStatistics(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- STUDIJŲ PROGRAMŲ STATISTIKA ---");
+-- Studentų egzaminų vidurkiai
+CREATE VIEW Studentu_egz_vidurkiai AS
+SELECT
+    S.Studento_nr,
+    S.Vardas,
+    S.Pavarde,
+    SP.Pavadinimas AS Studiju_programa,
+    AVG(L.Pazymys) AS Vidurkis
+FROM Studentas S
+         JOIN Studiju_programa SP ON S.Studiju_programa_pav = SP.Pavadinimas
+         LEFT JOIN Laiko L ON S.Studento_nr = L.Studento_nr
+GROUP BY S.Studento_nr, S.Vardas, S.Pavarde, SP.Pavadinimas;
 
-// Atnaujinti materialized view
-        using (var cmd = new NpgsqlCommand("REFRESH MATERIALIZED VIEW Studiju_programu_statistika", conn))
-        {
-            cmd.ExecuteNonQuery();
-}
-        
-        string sql = "SELECT * FROM Studiju_programu_statistika ORDER BY Studentu_skaicius DESC";
+-- Probleminiai studentai (vidurkis < 5 arba 2+ neišlaikyti)
+CREATE VIEW Probleminiai_studentai AS
+SELECT
+    S.Studento_nr,
+    S.Vardas,
+    S.Pavarde,
+    S.Studiju_programa,
+    S.Vidurkis,
+    COUNT(CASE WHEN L.Pazymys < 5 THEN 1 END) AS Neislaikyti
+FROM Studentu_egz_vidurkiai S
+         LEFT JOIN Laiko L ON S.Studento_nr = L.Studento_nr
+GROUP BY S.Studento_nr, S.Vardas, S.Pavarde, S.Studiju_programa, S.Vidurkis
+HAVING S.Vidurkis < 5 OR COUNT(CASE WHEN L.Pazymys < 5 THEN 1 END) >= 2;
 
-using var cmd2 = new NpgsqlCommand(sql, conn);
-using var reader = cmd2.ExecuteReader();
-        
-        Console.WriteLine($"{"Programa",-25} {"Studentų",-10} {"Vidurkis",-10} {"Neišlaikyta"}");
-        Console.WriteLine(new string('-', 60));
-        
-        while (reader.Read())
-        {
-            string programa = reader.GetString(0);
-            long studentai = reader.GetInt64(1);
-            var vidurkis = reader.IsDBNull(2) ? "N/A" : reader.GetDecimal(2).ToString("F2");
-            long neislaikyta = reader.GetInt64(3);
-            
-            Console.WriteLine($"{programa,-25} {studentai,-10} {vidurkis,-10} {neislaikyta}");
-}
-    }
 
-    // 11. Materialized view - dėstytojų darbo krūvis
-    static void ShowTeacherWorkload(NpgsqlConnection conn)
-    {
-        Console.WriteLine("\n--- DĖSTYTOJŲ DARBO KRŪVIS ---");
+-- MATERIALIZUOTOS LENTELĖS (MATERIALIZED VIEWS)
+-- Studijų programų statistika
+CREATE MATERIALIZED VIEW Studiju_programu_statistika AS
+SELECT
+    SP.Pavadinimas AS Studiju_programa,
+    COUNT(DISTINCT S.Studento_nr) AS Studentu_skaicius,
+    ROUND(AVG(L.Pazymys), 2) AS Programos_vidurkis,
+    COUNT(CASE WHEN L.Pazymys < 5 THEN 1 END) AS Neišlaikyti_egzaminai
+FROM Studiju_programa SP
+         LEFT JOIN Studentas S ON S.Studiju_programa_pav = SP.Pavadinimas
+         LEFT JOIN Laiko L ON L.Studento_nr = S.Studento_nr
+GROUP BY SP.Pavadinimas;
 
-// Atnaujinti materialized view
-        using (var cmd = new NpgsqlCommand("REFRESH MATERIALIZED VIEW Destytoju_darbo_kruvis", conn))
-        {
-            cmd.ExecuteNonQuery();
-}
-        
-        string sql = @"SELECT Destytojo_nr, Vardas, Pavarde, Destomu_dalyku_sk, Mokomu_studentu_sk
-                       FROM Destytoju_darbo_kruvis
-                       ORDER BY Mokomu_studentu_sk DESC";
+-- Dėstytojų darbo krūvis
+CREATE MATERIALIZED VIEW Destytoju_darbo_kruvis AS
+SELECT
+    D.Destytojo_nr,
+    D.Vardas,
+    D.Pavarde,
+    COUNT(DISTINCT DE.Dalyko_pav) AS Destomu_dalyku_sk,
+    COUNT(DISTINCT LD.Studento_nr) AS Mokomu_studentu_sk
+FROM Destytojas D
+         LEFT JOIN Desto DE ON D.Destytojo_nr = DE.Destytojo_nr
+         LEFT JOIN Lanko_dalyka LD ON DE.Dalyko_pav = LD.Dalyko_pav
+GROUP BY D.Destytojo_nr;
 
-using var cmd2 = new NpgsqlCommand(sql, conn);
-using var reader = cmd2.ExecuteReader();
-        
-        Console.WriteLine($"{"Nr",-5} {"Vardas",-15} {"Pavardė",-15} {"Dalykų",-10} {"Studentų"}");
-        Console.WriteLine(new string('-', 65));
-        
-        while (reader.Read())
-        {
-            Console.WriteLine($"{reader.GetInt32(0),-5} {reader.GetString(1),-15} {reader.GetString(2),-15} " +
-                            $"{reader.GetInt64(3),-10} {reader.GetInt64(4)}");
-}
-    }
-}
+-- DALYKINĖS TAISYKLĖS / TRIGGERIAI
+-- 1. Studento stojamojo balo patikrinimas
+CREATE OR REPLACE FUNCTION Tikrinti_stojamaji_bala()
+RETURNS TRIGGER AS $$
+DECLARE
+minimalus_balas DECIMAL(4, 2);
+BEGIN
+SELECT Stojamasis_balas INTO minimalus_balas
+FROM Studiju_programa
+WHERE Pavadinimas = NEW.Studiju_programa_pav;
+
+IF NEW.Stojamasis_balas < minimalus_balas THEN
+        RAISE EXCEPTION 'studento stojamasis balas per mazas studiju programai';
+RETURN NULL;
+END IF;
+RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER triggeris_stojamajam
+    BEFORE INSERT OR UPDATE ON Studentas
+                         FOR EACH ROW
+                         EXECUTE FUNCTION Tikrinti_stojamaji_bala();
+
+-- 2. Dėstytojo ir dalyko fakulteto patikrinimas
+CREATE OR REPLACE FUNCTION Tikrinti_fakulteta()
+RETURNS TRIGGER AS $$
+DECLARE
+destytojo_fak VARCHAR(100);
+    dalyko_fak VARCHAR(100);
+BEGIN
+SELECT Fakultetas INTO destytojo_fak
+FROM Destytojas
+WHERE Destytojo_nr = NEW.Destytojo_nr;
+
+SELECT Fakultetas INTO dalyko_fak
+FROM Dalykas
+WHERE Pavadinimas = NEW.Dalyko_pav;
+
+IF destytojo_fak IS DISTINCT FROM dalyko_fak THEN
+        RAISE EXCEPTION 'skirtingi destytojo ir dalyko fakultetai';
+RETURN NULL;
+END IF;
+RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER triggeris_fakultetui
+    BEFORE INSERT OR UPDATE ON Desto
+                         FOR EACH ROW
+                         EXECUTE FUNCTION Tikrinti_fakulteta();
+
+-- 3. Studento ir grupės studijų programos patikrinimas
+CREATE OR REPLACE FUNCTION Tikrinti_stud_prog()
+RETURNS TRIGGER AS $$
+DECLARE
+grupes_programa VARCHAR(100);
+BEGIN 
+    IF NEW.Grupes_numeris IS NOT NULL THEN
+SELECT Studiju_programa_pav INTO grupes_programa
+FROM Grupe
+WHERE Grupes_id = NEW.Grupes_numeris;
+
+IF NEW.Studiju_programa_pav IS DISTINCT FROM grupes_programa THEN
+            RAISE EXCEPTION 'grupes ir studento fakultetai nesutampa';
+RETURN NULL;
+END IF;
+END IF;
+RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER triggeris_studiju_prog
+    BEFORE INSERT OR UPDATE OF Grupes_numeris ON Studentas
+    FOR EACH ROW
+    EXECUTE FUNCTION Tikrinti_stud_prog();
+
+-- 4. Dėstytojo kvalifikacijos laipsnio patikrinimas
+CREATE OR REPLACE FUNCTION Tikrinti_laipsni()
+RETURNS TRIGGER AS $$
+DECLARE
+destytojo_laipsnis VARCHAR(100);
+    reikalingas_laipsnis VARCHAR(100);
+BEGIN
+SELECT Laipsnis INTO destytojo_laipsnis
+FROM Destytojas
+WHERE Destytojo_nr = NEW.Destytojo_nr;
+
+SELECT d.Reikalingas_laipsnis INTO reikalingas_laipsnis
+FROM Dalykas d
+WHERE d.Pavadinimas = NEW.Dalyko_pav;
+
+IF destytojo_laipsnis IN ('Bakalauras') AND 
+       reikalingas_laipsnis IN ('Magistrantas', 'Docentas', 'Daktaras', 'Profesorius') THEN
+        RAISE EXCEPTION 'netinkamas destytojo kvalifikacijos laipsnis';
+RETURN NULL;
+END IF;
+RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER triggeris_laipsnis
+    BEFORE INSERT OR UPDATE ON Desto
+                         FOR EACH ROW
+                         EXECUTE FUNCTION Tikrinti_laipsni();
+
+
+-- PABAIGA
+-- Atnaujinti materialized views
+REFRESH MATERIALIZED VIEW Studiju_programu_statistika;
+REFRESH MATERIALIZED VIEW Destytoju_darbo_kruvis;
+
+-- Pranešimas apie sėkmingą sukūrimą
+DO $$
+BEGIN
+    RAISE NOTICE 'Schema sėkmingai sukurta!';
+    RAISE NOTICE 'Sukurtos lentelės: 9';
+    RAISE NOTICE 'Sukurti view''ai: 2';
+    RAISE NOTICE 'Sukurti materialized view''ai: 2';
+    RAISE NOTICE 'Sukurti triggeriai: 4';
+END $$;
